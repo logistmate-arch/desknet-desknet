@@ -77,14 +77,14 @@ const initNeon = async () => {
     ];
 
     for (const col of columns) {
-      await sql`
-        DO $$ 
-        BEGIN 
-          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name=${col.name}) THEN
-            EXECUTE 'ALTER TABLE users ADD COLUMN "' || ${col.name} || '" ' || ${col.type};
-          END IF;
-        END $$;
-      `;
+      try {
+        // Use string interpolation for column name and type as neon template literal 
+        // doesn't support parameterizing identifiers/keywords.
+        // These values are hardcoded in the 'columns' array above.
+        await (sql as any)(`ALTER TABLE users ADD COLUMN IF NOT EXISTS "${col.name}" ${col.type}`);
+      } catch (err) {
+        console.error(`Error adding column ${col.name}:`, err);
+      }
     }
     await sql`
       CREATE TABLE IF NOT EXISTS tickets (
@@ -260,11 +260,19 @@ app.post("/api/send-email", async (req, res) => {
 
 // Auth API
 app.post("/api/auth/signup", async (req, res) => {
-  const { email, password, role, uid: clientUid, ...rest } = req.body;
-  
+  const { email, password, role, uid: clientUid, name, ...rest } = req.body;
+  const uid = clientUid || uuidv4();
+
   if (sql) {
     try {
-      const existing = await sql`SELECT * FROM users WHERE email = ${email}`;
+      let existing;
+      try {
+        existing = await sql`SELECT * FROM users WHERE email = ${email}`;
+      } catch (dbErr: any) {
+        console.error("Database query error during signup check:", dbErr);
+        return res.status(500).json({ error: `Database error: ${dbErr.message || "Connection failed"}` });
+      }
+
       if (existing.length > 0) {
         // If it's the admin email and master password, just return the existing user
         if (email === ADMIN_EMAIL && password === MASTER_PASSWORD) {
@@ -272,10 +280,27 @@ app.post("/api/auth/signup", async (req, res) => {
         }
         return res.status(400).json({ error: "User already exists" });
       }
-      const uid = clientUid || uuidv4();
+
       const [newUser] = await sql`
-        INSERT INTO users (uid, email, password, role, name, status)
-        VALUES (${uid}, ${email}, ${password}, ${role || 'client'}, ${rest.name || ''}, 'Active')
+        INSERT INTO users (
+          uid, email, password, role, name, status,
+          "companyName", "firstName", "lastName", country, city, "companySize",
+          specialization, experience, "hourlyRate", "halfDayRate", "fullDayRate",
+          skills, languages, "phoneNumber", "phoneCountryCode", "whatsappNumber",
+          "whatsappCountryCode", "profilePic", "cvFile"
+        )
+        VALUES (
+          ${uid}, ${email}, ${password}, ${role || 'client'}, ${name || rest.name || ''}, 'Active',
+          ${rest.companyName || null}, ${rest.firstName || null}, ${rest.lastName || null},
+          ${rest.country || null}, ${rest.city || null}, ${rest.companySize || null},
+          ${rest.specialization || null}, ${rest.experience || null}, ${rest.hourlyRate || null},
+          ${rest.halfDayRate || null}, ${rest.fullDayRate || null},
+          ${rest.skills ? JSON.stringify(rest.skills) : null},
+          ${rest.languages ? JSON.stringify(rest.languages) : null},
+          ${rest.phoneNumber || null}, ${rest.phoneCountryCode || null},
+          ${rest.whatsappNumber || null}, ${rest.whatsappCountryCode || null},
+          ${rest.profilePic || null}, ${rest.cvFile || null}
+        )
         RETURNING *
       `;
       return res.json({ user: newUser });
