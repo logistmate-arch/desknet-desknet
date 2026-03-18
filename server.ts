@@ -318,7 +318,6 @@ app.post("/api/auth/signup", async (req, res) => {
     }
     return res.status(400).json({ error: "User already exists" });
   }
-  const uid = clientUid || uuidv4();
   const newUser = { 
     ...rest, 
     email, 
